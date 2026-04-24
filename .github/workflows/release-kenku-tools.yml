@@ -1,0 +1,70 @@
+name: Release Kenku Tool Binaries
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - feat/kenku-json-loop-cli
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform_key: linux-x64
+            artifact_name: pymusiclooper-kenku-linux-x64
+            executable_path: dist/pymusiclooper-kenku
+          - os: windows-latest
+            platform_key: win32-x64
+            artifact_name: pymusiclooper-kenku-win32-x64.exe
+            executable_path: dist/pymusiclooper-kenku.exe
+          - os: macos-14
+            platform_key: darwin-arm64
+            artifact_name: pymusiclooper-kenku-darwin-arm64
+            executable_path: dist/pymusiclooper-kenku
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install . pyinstaller
+
+      - name: Build single-file executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          pyinstaller --onefile --name pymusiclooper-kenku pymusiclooper/__main__.py
+
+      - name: Prepare release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ matrix.executable_path }}" "${{ matrix.artifact_name }}"
+
+      - name: Publish/overwrite kenku-tools release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: kenku-tools-latest
+          name: kenku-tools-latest
+          prerelease: true
+          overwrite_files: true
+          files: |
+            ${{ matrix.artifact_name }}
