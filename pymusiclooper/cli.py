@@ -1,4 +1,5 @@
 import functools
+import json
 import logging
 import os
 import tempfile
@@ -174,6 +175,123 @@ def play_tagged(path, tag_names, tag_offset):
 
     except Exception as e:
         print_exception(e)
+
+
+@cli_main.command("loop-points")
+@click.option('--path', type=click.Path(exists=True), required=True, help='Path to the audio file.')
+@common_loop_options
+def loop_points(path, **kwargs):
+    """Analyze and print loop points as JSON for machine-to-machine integrations."""
+    try:
+        with Progress(
+            SpinnerColumn(),
+            *Progress.get_default_columns(),
+            TimeElapsedColumn(),
+            console=rich_console,
+            transient=True
+        ) as progress:
+            progress.add_task("Processing", total=None)
+            handler = LoopHandler(path=path, **kwargs)
+
+        pairs = handler.get_all_loop_pairs()
+        chosen_loop_pair = handler.choose_loop_pair(interactive_mode=False)
+        payload = {
+            "source": "analysis",
+            "start": int(chosen_loop_pair.loop_start),
+            "end": int(chosen_loop_pair.loop_end),
+            "sampleRate": int(handler.musiclooper.mlaudio.rate),
+            "candidates": [
+                {
+                    "start": int(pair.loop_start),
+                    "end": int(pair.loop_end),
+                    "score": float(pair.score),
+                }
+                for pair in pairs
+            ],
+        }
+        click.echo(json.dumps(payload))
+    except (AudioLoadError, LoopNotFoundError, Exception) as e:
+        print_exception(e)
+        raise SystemExit(1)
+
+
+@cli_main.command("tag-read")
+@click.option('--path', type=click.Path(exists=True), required=True, help='Path to the audio file.')
+@click.option("--tag-names", type=str, required=False, nargs=2, help="Name of the loop metadata tags to read from. Default: auto-detected.")
+@click.option("--tag-offset/--no-tag-offset", is_flag=True, default=None, help="Parse second loop metadata tag as relative length/absolute end. Default: auto-detect.")
+def tag_read(path, tag_names, tag_offset):
+    """Read loop tags and print them as JSON."""
+    try:
+        if tag_names is None:
+            tag_names = [None, None]
+
+        looper = MusicLooper(path)
+        loop_start, loop_end = looper.read_tags(tag_names[0], tag_names[1], tag_offset)
+        tags_payload = {}
+        try:
+            import taglib
+            with taglib.File(path, save_on_exit=False) as audio_file:
+                tags_payload = {
+                    key: (values[0] if len(values) == 1 else ",".join(values))
+                    for key, values in audio_file.tags.items()
+                }
+        except Exception:
+            pass
+
+        payload = {
+            "start": int(loop_start),
+            "end": int(loop_end),
+            "sampleRate": int(looper.mlaudio.rate),
+            "tags": tags_payload,
+        }
+        click.echo(json.dumps(payload))
+    except Exception as e:
+        print_exception(e)
+        raise SystemExit(1)
+
+
+def _end_tag_is_offset(loop_end_tag: str, is_offset):
+    if is_offset is not None:
+        return is_offset
+    upper_loop_end_tag = loop_end_tag.upper()
+    return "LEN" in upper_loop_end_tag or "OFFSET" in upper_loop_end_tag
+
+
+@cli_main.command("tag-write")
+@click.option('--path', type=click.Path(exists=True), required=True, help='Path to the audio file.')
+@click.option("--start", type=int, required=True, help="Loop start in samples.")
+@click.option("--end", type=int, required=True, help="Loop end in samples.")
+@click.option("--start-tag", type=str, default="LOOP_START", show_default=True, help="Tag name for loop start.")
+@click.option("--end-tag", type=str, default="LOOP_END", show_default=True, help="Tag name for loop end or length.")
+@click.option("--tag-offset/--no-tag-offset", is_flag=True, default=None, help="Write end tag as relative length/absolute end. Default: auto-detect.")
+def tag_write(path, start, end, start_tag, end_tag, tag_offset):
+    """Write loop tags in-place and print the resulting values as JSON."""
+    try:
+        import taglib
+        looper = MusicLooper(path)
+
+        tag_end_value = int(end)
+        if _end_tag_is_offset(end_tag, tag_offset):
+            tag_end_value = int(end - start)
+
+        with taglib.File(path, save_on_exit=True) as audio_file:
+            audio_file.tags[start_tag] = [str(int(start))]
+            audio_file.tags[end_tag] = [str(tag_end_value)]
+            tags_payload = {
+                key: (values[0] if len(values) == 1 else ",".join(values))
+                for key, values in audio_file.tags.items()
+            }
+
+        payload = {
+            "start": int(start),
+            "end": int(end),
+            "sampleRate": int(looper.mlaudio.rate),
+            "tags": tags_payload,
+        }
+        click.echo(json.dumps(payload))
+    except Exception as e:
+        print_exception(e)
+        raise SystemExit(1)
 
 
 @cli_main.command()
