@@ -40,6 +40,8 @@ def find_best_loop_points(
     approx_loop_end: Optional[float] = None,
     brute_force: bool = False,
     disable_pruning: bool = False,
+    fast: bool = False,
+    _benchmarks: Optional[dict] = None,
 ) -> List[LoopPair]:
     """Finds the best loop points for a given audio track, given the constraints specified
 
@@ -58,6 +60,9 @@ def find_best_loop_points(
     Returns:
         List[LoopPair]: A list of `LoopPair` objects containing the loop points related data. See the `LoopPair` class for more info.
     """
+    def _ms(t0: float) -> int:
+        return round((time.perf_counter() - t0) * 1000)
+
     runtime_start = time.perf_counter()
     min_loop_duration = (
         mlaudio.seconds_to_frames(min_loop_duration)
@@ -78,7 +83,10 @@ def find_best_loop_points(
     if approx_loop_start is not None and approx_loop_end is not None:
         # Skipping the unnecessary beat analysis (in this case) speeds up the analysis runtime by ~2x
         # and significantly reduces the total memory consumption
-        chroma, power_db, _, _ = _analyze_audio(mlaudio, skip_beat_analysis=True)
+        t0 = time.perf_counter()
+        chroma, power_db, _, _ = _analyze_audio(mlaudio, skip_beat_analysis=True, fast=fast, _benchmarks=_benchmarks)
+        if _benchmarks is not None:
+            _benchmarks["analyze_audio_ms"] = _ms(t0)
         # Set bpm to a general average of 120
         bpm = 120.0
 
@@ -124,14 +132,20 @@ def find_best_loop_points(
         )
     elif brute_force:
         # Similarly skip beat analysis, as the results will not be used
-        chroma, power_db, _, _ = _analyze_audio(mlaudio, skip_beat_analysis=True)
+        t0 = time.perf_counter()
+        chroma, power_db, _, _ = _analyze_audio(mlaudio, skip_beat_analysis=True, fast=fast, _benchmarks=_benchmarks)
+        if _benchmarks is not None:
+            _benchmarks["analyze_audio_ms"] = _ms(t0)
         bpm = 120.0
         beats = np.arange(start=0, stop=chroma.shape[-1], step=1, dtype=int)
         logging.info(f"Overriding number of frames to check with: {beats.size}")
         logging.info(f"Estimated iterations required using brute force: {int(beats.size*beats.size*(1-(min_loop_duration/chroma.shape[-1])))}")
         logging.info("**NOTICE** The program may appear frozen, but processing will continue in the background. This operation may take several minutes to complete.")
     else: # normal mode of operation
-        chroma, power_db, bpm, beats = _analyze_audio(mlaudio)
+        t0 = time.perf_counter()
+        chroma, power_db, bpm, beats = _analyze_audio(mlaudio, fast=fast, _benchmarks=_benchmarks)
+        if _benchmarks is not None:
+            _benchmarks["analyze_audio_ms"] = _ms(t0)
         logging.info(f"Detected {beats.size} beats at {bpm:.0f} bpm")
 
     logging.info(
@@ -144,9 +158,12 @@ def find_best_loop_points(
 
     # Since numba jitclass cannot be cached, the pair data must be stored temporarily in a list of tuple
     # (instead of a list of LoopPairs directly) and then loaded into a list of LoopPair objects using list comprehension
+    t0 = time.perf_counter()
     unproc_candidate_pairs = _find_candidate_pairs(
         chroma, power_db, beats, min_loop_duration, max_loop_duration
     )
+    if _benchmarks is not None:
+        _benchmarks["candidate_pairs_ms"] = _ms(t0)
     candidate_pairs = [
         LoopPair(
             _loop_start_frame_idx=tup[0],
@@ -168,9 +185,12 @@ def find_best_loop_points(
             f"No loop points found for \"{mlaudio.filename}\" with current parameters."
         )
 
+    t0 = time.perf_counter()
     filtered_candidate_pairs = _assess_and_filter_loop_pairs(
         mlaudio, chroma, bpm, candidate_pairs, disable_pruning
     )
+    if _benchmarks is not None:
+        _benchmarks["assess_filter_ms"] = _ms(t0)
 
     # prefer longer loops for highly similar sequences
     if len(filtered_candidate_pairs) > 1:
@@ -179,6 +199,7 @@ def find_best_loop_points(
     # Set the exact loop start and end in samples and adjust them
     # to the nearest zero crossing. Avoids audio popping/clicking while looping
     # as much as possible.
+    t0 = time.perf_counter()
     for pair in filtered_candidate_pairs:
         if mlaudio.trim_offset > 0:
             pair._loop_start_frame_idx = int(
@@ -197,6 +218,8 @@ def find_best_loop_points(
             mlaudio.rate,
             mlaudio.frames_to_samples(pair._loop_end_frame_idx)
         )
+    if _benchmarks is not None:
+        _benchmarks["zero_crossing_ms"] = _ms(t0)
 
     if not filtered_candidate_pairs:
         raise LoopNotFoundError(
@@ -206,6 +229,10 @@ def find_best_loop_points(
     logging.info(
         f"Filtered to {len(filtered_candidate_pairs)} best candidate loop points"
     )
+
+    if _benchmarks is not None:
+        _benchmarks["total_ms"] = _ms(runtime_start)
+
     logging.info(
         f"Total analysis runtime: {time.perf_counter() - runtime_start:.3f}s"
     )
@@ -214,40 +241,67 @@ def find_best_loop_points(
 
 
 def _analyze_audio(
-    mlaudio: MLAudio, skip_beat_analysis=False
+    mlaudio: MLAudio, skip_beat_analysis=False, fast=False, _benchmarks=None
 ) -> Tuple[np.ndarray, np.ndarray, float, np.ndarray]:
     """Performs the main audio analysis required
 
     Args:
         mlaudio (MLAudio): the MLAudio object to perform analysis on
         skip_beat_analysis (bool, optional): Skips beat analysis if true and returns None for bpm and beats. Defaults to False.
+        fast (bool, optional): Uses mlaudio's fast analysis settings (lower SR, larger hop, no PLP). Defaults to False.
+        _benchmarks (dict, optional): If provided, populated with per-stage timing in milliseconds.
 
     Returns:
         Tuple[np.ndarray, np.ndarray, float, np.ndarray]: a tuple containing the (chroma spectrogram, power spectrogram in dB, tempo/bpm, frame indices of detected beats)
     """
-    S = librosa.core.stft(y=mlaudio.audio)
+    def _ms(t0: float) -> int:
+        return round((time.perf_counter() - t0) * 1000)
+
+    t0 = time.perf_counter()
+    S = librosa.core.stft(y=mlaudio.audio, hop_length=mlaudio.hop_length)
     S_power = np.abs(S) ** 2
+    if _benchmarks is not None:
+        _benchmarks["stft_ms"] = _ms(t0)
+
+    t0 = time.perf_counter()
     S_weighed = librosa.core.perceptual_weighting(
-        S=S_power, frequencies=librosa.fft_frequencies(sr=mlaudio.rate)
+        S=S_power, frequencies=librosa.fft_frequencies(sr=mlaudio.analysis_rate)
     )
     mel_spectrogram = librosa.feature.melspectrogram(
-        S=S_weighed, sr=mlaudio.rate, n_mels=128, fmax=8000
+        S=S_weighed, sr=mlaudio.analysis_rate, n_mels=128, fmax=8000
     )
-    chroma = librosa.feature.chroma_stft(S=S_power)
+    if _benchmarks is not None:
+        _benchmarks["mel_ms"] = _ms(t0)
+
+    t0 = time.perf_counter()
+    chroma = librosa.feature.chroma_stft(S=S_power, sr=mlaudio.analysis_rate, hop_length=mlaudio.hop_length)
+    if _benchmarks is not None:
+        _benchmarks["chroma_ms"] = _ms(t0)
+
     power_db = librosa.power_to_db(S_weighed, ref=np.median)
 
     if skip_beat_analysis:
         return chroma, power_db, None, None
 
     try:
-        onset_env = librosa.onset.onset_strength(S=mel_spectrogram)
+        t0 = time.perf_counter()
+        onset_env = librosa.onset.onset_strength(S=mel_spectrogram, sr=mlaudio.analysis_rate)
+        if _benchmarks is not None:
+            _benchmarks["onset_ms"] = _ms(t0)
 
-        pulse = librosa.beat.plp(onset_envelope=onset_env)
-        beats_plp = np.flatnonzero(librosa.util.localmax(pulse))
-        bpm, beats = librosa.beat.beat_track(onset_envelope=onset_env)
+        t0 = time.perf_counter()
+        bpm, beats = librosa.beat.beat_track(onset_envelope=onset_env, sr=mlaudio.analysis_rate, hop_length=mlaudio.hop_length)
+        if _benchmarks is not None:
+            _benchmarks["beat_track_ms"] = _ms(t0)
 
-        beats = np.union1d(beats, beats_plp)
-        beats = np.sort(beats)
+        if not fast:
+            t0 = time.perf_counter()
+            pulse = librosa.beat.plp(onset_envelope=onset_env)
+            beats_plp = np.flatnonzero(librosa.util.localmax(pulse))
+            beats = np.union1d(beats, beats_plp)
+            beats = np.sort(beats)
+            if _benchmarks is not None:
+                _benchmarks["plp_ms"] = _ms(t0)
 
         if isinstance(bpm, np.ndarray):
             bpm = bpm[0]

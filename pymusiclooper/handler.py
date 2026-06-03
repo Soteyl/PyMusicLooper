@@ -25,6 +25,8 @@ class LoopHandler:
         approx_loop_position: Optional[tuple] = None,
         brute_force: bool = False,
         disable_pruning: bool = False,
+        fast: bool = False,
+        benchmark: bool = False,
         _progressbar: Progress = None,
         **kwargs,
     ):
@@ -36,7 +38,13 @@ class LoopHandler:
             self.approx_loop_end = None
 
         self.filepath = path
-        self._musiclooper = MusicLooper(filepath=path)
+        self.benchmarks: Optional[dict] = {} if benchmark else None
+
+        import time as _time
+        t0 = _time.perf_counter()
+        self._musiclooper = MusicLooper(filepath=path, fast=fast)
+        if self.benchmarks is not None:
+            self.benchmarks["audio_load_ms"] = round((_time.perf_counter() - t0) * 1000)
 
         logging.info(f"Loaded \"{path}\". Analyzing...")
 
@@ -48,6 +56,8 @@ class LoopHandler:
             approx_loop_end=self.approx_loop_end,
             brute_force=brute_force,
             disable_pruning=disable_pruning,
+            fast=fast,
+            _benchmarks=self.benchmarks,
         )
         self.interactive_mode = "PML_INTERACTIVE_MODE" in os.environ
         self.in_samples = "PML_DISPLAY_SAMPLES" in os.environ

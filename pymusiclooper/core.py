@@ -18,13 +18,14 @@ soundfile = lazy.load("soundfile")
 
 class MusicLooper:
     """High-level API access to PyMusicLooper's main functions."""
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str, fast: bool = False):
         """Initializes the MusicLooper object with the provided audio track.
 
         Args:
             filepath (str): path to the audio track to use.
+            fast (bool): enable fast analysis mode.
         """
-        self.mlaudio = MLAudio(filepath=filepath)
+        self.mlaudio = MLAudio(filepath=filepath, fast=fast)
 
     def find_loop_pairs(
         self,
@@ -35,6 +36,8 @@ class MusicLooper:
         approx_loop_end: Optional[float] = None,
         brute_force: bool = False,
         disable_pruning: bool = False,
+        fast: bool = False,
+        _benchmarks: Optional[dict] = None,
     ) -> List[LoopPair]:
         """Finds the best loop points for the track, according to the parameters specified.
 
@@ -46,7 +49,9 @@ class MusicLooper:
             approx_loop_end (float, optional): The approximate location of the desired loop end (in seconds). If specified, must specify approx_loop_start as well. Defaults to None.
             brute_force (bool, optional): Checks the entire track instead of the detected beats (disclaimer: runtime may be significantly longer). Defaults to False.
             disable_pruning (bool, optional): Returns all the candidate loop points without filtering. Defaults to False.
-        
+            fast (bool, optional): Enable fast analysis mode. Defaults to False.
+            _benchmarks (dict, optional): If provided, populated with per-stage timing in milliseconds.
+
         Raises:
             LoopNotFoundError: raised in case no loops were found
 
@@ -61,7 +66,9 @@ class MusicLooper:
             approx_loop_start=approx_loop_start,
             approx_loop_end=approx_loop_end,
             brute_force=brute_force,
-            disable_pruning=disable_pruning
+            disable_pruning=disable_pruning,
+            fast=fast,
+            _benchmarks=_benchmarks,
         )
 
     @property

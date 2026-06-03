@@ -19,11 +19,12 @@ class MLAudio:
     n_channels: int
     length: int
 
-    def __init__(self, filepath: str) -> None:
+    def __init__(self, filepath: str, fast: bool = False) -> None:
         """Initializes the MLAudio object and its data by loading the audio using the filepath provided.
 
         Args:
             filepath (str): path to the audio file
+            fast (bool): enable fast analysis mode (lower SR, larger hop, skips PLP)
 
         Raises:
             AudioLoadError: If the file could not be loaded.
@@ -54,6 +55,14 @@ class MLAudio:
         self.trim_offset = self.trim_offset[0]
 
         self.rate = sampling_rate
+        self.hop_length = 1024 if fast else 512
+        self.analysis_rate = sampling_rate
+
+        # For fast mode, downsample analysis audio to 22050 Hz
+        _FAST_ANALYSIS_RATE = 22050
+        if fast and sampling_rate != _FAST_ANALYSIS_RATE:
+            self.audio = librosa.resample(self.audio, orig_sr=sampling_rate, target_sr=_FAST_ANALYSIS_RATE)
+            self.analysis_rate = _FAST_ANALYSIS_RATE
 
         # Initialize parameters for playback
         self.playback_audio = raw_audio
@@ -67,35 +76,41 @@ class MLAudio:
         self.length = self.playback_audio.shape[0]
 
     def apply_trim_offset(self, frame):
-        return (
-            librosa.samples_to_frames(
-                librosa.frames_to_samples(frame) + self.trim_offset
-            )
-            if self.trim_offset
-            else frame
+        if not self.trim_offset:
+            return frame
+        analysis_samples = librosa.core.frames_to_samples(frame, hop_length=self.hop_length)
+        # trim_offset is in native SR samples; scale to analysis SR
+        analysis_trim_offset = int(round(self.trim_offset * self.analysis_rate / self.rate))
+        return librosa.core.samples_to_frames(
+            analysis_samples + analysis_trim_offset, hop_length=self.hop_length
         )
 
     def samples_to_frames(self, samples):
-        return librosa.core.samples_to_frames(samples)
+        if self.analysis_rate != self.rate:
+            samples = int(round(samples * self.analysis_rate / self.rate))
+        return librosa.core.samples_to_frames(samples, hop_length=self.hop_length)
 
     def samples_to_seconds(self, samples):
         return librosa.core.samples_to_time(samples, sr=self.rate)
 
     def frames_to_samples(self, frame):
-        return librosa.core.frames_to_samples(frame)
+        analysis_samples = librosa.core.frames_to_samples(frame, hop_length=self.hop_length)
+        if self.analysis_rate != self.rate:
+            return int(round(analysis_samples * self.rate / self.analysis_rate))
+        return analysis_samples
 
     def seconds_to_frames(self, seconds, apply_trim_offset=False):
         if apply_trim_offset:
             seconds = seconds - librosa.core.samples_to_time(
                 self.trim_offset, sr=self.rate
             )
-        return librosa.core.time_to_frames(seconds, sr=self.rate)
+        return librosa.core.time_to_frames(seconds, sr=self.analysis_rate, hop_length=self.hop_length)
 
     def seconds_to_samples(self, seconds):
         return librosa.core.time_to_samples(seconds, sr=self.rate)
 
     def frames_to_ftime(self, frame: int):
-        time_sec = librosa.core.frames_to_time(frame, sr=self.rate)
+        time_sec = librosa.core.frames_to_time(frame, sr=self.analysis_rate, hop_length=self.hop_length)
         return f"{time_sec // 60:02.0f}:{time_sec % 60:06.3f}"
     
     def samples_to_ftime(self, samples: int):

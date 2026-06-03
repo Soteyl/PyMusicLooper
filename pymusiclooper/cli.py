@@ -78,6 +78,7 @@ def common_loop_options(f):
     @click.option('--approx-loop-position', type=click.FloatRange(min=0), nargs=2, default=None, help='The approximate desired loop start and loop end in seconds. [dim]([cyan]+/-2[/] second search window for each point)[/]')
     @click.option("--brute-force", is_flag=True, default=False, help=r"Check the entire audio track instead of just the detected beats. [dim yellow](Warning: may take several minutes to complete.)[/]")
     @click.option("--disable-pruning", is_flag=True, default=False, help="Disables filtering of the detected loop points from the initial pass.")
+    @click.option("--fast", is_flag=True, default=False, help="Enable fast analysis mode: downsamples audio to 22050 Hz, uses larger hop size, skips PLP beat detection, and uses parallel processing. Trades some accuracy for speed.")
 
     @functools.wraps(f)
     def wrapper_common_options(*args, **kwargs):
@@ -179,8 +180,9 @@ def play_tagged(path, tag_names, tag_offset):
 
 @cli_main.command("loop-points")
 @click.option('--path', type=click.Path(exists=True), required=True, help='Path to the audio file.')
+@click.option("--benchmark", is_flag=True, default=False, help="Include per-stage timing (in ms) in the JSON output under a 'benchmarks' key.")
 @common_loop_options
-def loop_points(path, **kwargs):
+def loop_points(path, benchmark, **kwargs):
     """Analyze and print loop points as JSON for machine-to-machine integrations."""
     try:
         with Progress(
@@ -191,7 +193,7 @@ def loop_points(path, **kwargs):
             transient=True
         ) as progress:
             progress.add_task("Processing", total=None)
-            handler = LoopHandler(path=path, **kwargs)
+            handler = LoopHandler(path=path, benchmark=benchmark, **kwargs)
 
         pairs = handler.get_all_loop_pairs()
         chosen_loop_pair = handler.choose_loop_pair(interactive_mode=False)
@@ -209,6 +211,8 @@ def loop_points(path, **kwargs):
                 for pair in pairs
             ],
         }
+        if benchmark and handler.benchmarks:
+            payload["benchmarks"] = handler.benchmarks
         click.echo(json.dumps(payload))
     except (AudioLoadError, LoopNotFoundError, Exception) as e:
         print_exception(e)

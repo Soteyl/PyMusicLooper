@@ -51,7 +51,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pyinstaller --onefile --name pymusiclooper-kenku pymusiclooper/__main__.py
+          pyinstaller --onefile --collect-data pymusiclooper --name pymusiclooper-kenku pymusiclooper/__main__.py
 
       - name: Prepare release artifact
         shell: bash
