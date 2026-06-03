@@ -19,15 +19,12 @@ jobs:
           - os: ubuntu-latest
             platform_key: linux-x64
             artifact_name: pymusiclooper-kenku-linux-x64
-            executable_path: dist/pymusiclooper-kenku
           - os: windows-latest
             platform_key: win32-x64
-            artifact_name: pymusiclooper-kenku-win32-x64.exe
-            executable_path: dist/pymusiclooper-kenku.exe
+            artifact_name: pymusiclooper-kenku-win32-x64
           - os: macos-14
             platform_key: darwin-arm64
             artifact_name: pymusiclooper-kenku-darwin-arm64
-            executable_path: dist/pymusiclooper-kenku
 
     runs-on: ${{ matrix.os }}
 
@@ -47,17 +44,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install . pyinstaller
 
-      - name: Build single-file executable
+      - name: Build directory bundle
         shell: bash
         run: |
           set -euo pipefail
-          pyinstaller --onefile --collect-data pymusiclooper --name pymusiclooper-kenku pymusiclooper/__main__.py
+          pyinstaller pymusiclooper-kenku.spec
 
-      - name: Prepare release artifact
+      - name: Package bundle as tar.gz
         shell: bash
         run: |
           set -euo pipefail
-          cp "${{ matrix.executable_path }}" "${{ matrix.artifact_name }}"
+          tar -czf "${{ matrix.artifact_name }}.tar.gz" -C dist pymusiclooper-kenku
 
       - name: Publish/overwrite kenku-tools release
         uses: softprops/action-gh-release@v2
@@ -67,4 +64,4 @@ jobs:
           prerelease: true
           overwrite_files: true
           files: |
-            ${{ matrix.artifact_name }}
+            ${{ matrix.artifact_name }}.tar.gz

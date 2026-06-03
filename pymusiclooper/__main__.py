@@ -1,3 +1,13 @@
+import os
+
+# Set stable numba JIT cache dir before numba (or anything that imports numba) is touched.
+# In onefile PyInstaller mode the default cache path is inside the temp-extracted bundle,
+# which is recreated on every run, destroying the compiled cache each time.
+os.environ.setdefault(
+    "NUMBA_CACHE_DIR",
+    os.path.join(os.path.expanduser("~"), ".cache", "pymusiclooper", "numba"),
+)
+
 import logging
 
 from pymusiclooper.cli import cli_main

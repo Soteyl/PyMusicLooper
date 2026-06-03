@@ -78,8 +78,6 @@ def common_loop_options(f):
     @click.option('--approx-loop-position', type=click.FloatRange(min=0), nargs=2, default=None, help='The approximate desired loop start and loop end in seconds. [dim]([cyan]+/-2[/] second search window for each point)[/]')
     @click.option("--brute-force", is_flag=True, default=False, help=r"Check the entire audio track instead of just the detected beats. [dim yellow](Warning: may take several minutes to complete.)[/]")
     @click.option("--disable-pruning", is_flag=True, default=False, help="Disables filtering of the detected loop points from the initial pass.")
-    @click.option("--fast", is_flag=True, default=False, help="Enable fast analysis mode: downsamples audio to 22050 Hz, uses larger hop size, skips PLP beat detection, and uses parallel processing. Trades some accuracy for speed.")
-
     @functools.wraps(f)
     def wrapper_common_options(*args, **kwargs):
         return f(*args, **kwargs)
@@ -381,6 +379,7 @@ def print_exception(e: Exception):
         rich_console.print_exception(suppress=[click])
     else:
         logging.error(e)
+
 
 if __name__ == "__main__":
     cli_main()
